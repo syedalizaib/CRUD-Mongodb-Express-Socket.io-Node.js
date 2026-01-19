@@ -1,120 +1,338 @@
 const express = require("express");
-const app = express();
 const mongoose = require("mongoose");
 const cors = require("cors");
-require("dotenv/config");
-const bodyParser = require("body-parser");
-var io = require("socket.io");
 const http = require("http");
-const Schema = mongoose.Schema;
-const Todo = require("./models/todos.js").init(Schema, mongoose);
+const { Server } = require("socket.io");
+require("dotenv").config();
 
-//midlewares
-app.use(cors());
-app.use(bodyParser.json());
+// Import middleware
+const logger = require("./middleware/logger");
+const errorHandler = require("./middleware/errorHandler");
+const notFound = require("./middleware/notFound");
 
-//import routers
-const postRoute = require("./routes/users");
-app.use("/users", postRoute);
+// Import Swagger configuration
+const setupSwagger = require("./config/swagger");
 
-mongoose.connect(
-  process.env.DB_CONNECTION,
-  { useUnifiedTopology: true },
-  (error) => {
-    if (error) {
-      console.log("db connect error");
-    } else {
-      console.log("db connect success");
+// Import models
+const Todo = require("./models/todos");
+
+// Initialize Express app
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ============================================
+// MIDDLEWARE CONFIGURATION
+// ============================================
+
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: Health check endpoint
+ *     description: Returns API status and basic information
+ *     responses:
+ *       200:
+ *         description: API is running successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: API is running
+ *                 version:
+ *                   type: string
+ *                   example: 2.0.0
+ */
+
+// CORS configuration
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN || "*",
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
+
+// Body parser middleware (built into Express 4.16+)
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Custom logger middleware
+app.use(logger);
+
+// ============================================
+// SWAGGER DOCUMENTATION
+// ============================================
+setupSwagger(app);
+
+// ============================================
+// API ROUTES
+// ============================================
+
+// Health check route
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "API is running",
+    version: "2.0.0",
+    endpoints: {
+      users: "/users",
+      todos: "/todos",
+      assignments: "/assignments",
+      documentation: "/swagger"
     }
-  }
-);
-
-// app.listen(3000);
-
-app.set("port", process.env.PORT || 3000);
-// app.use(express.static(path.join(__dirname, "public")));
-
-var server = http.createServer(app).listen(app.get("port"), function () {
-  console.log("Express server listening on port " + app.get("port"));
+  });
 });
 
-var sio = io.listen(server);
-//User online user count variable
-var users = 0;
+// Import and use route modules
+const userRoutes = require("./routes/users");
+const todoRoutes = require("./routes/todos");
+const assignmentRoutes = require("./routes/assignments");
 
-var address_list = new Array();
+app.use("/users", userRoutes);
+app.use("/todos", todoRoutes);
+app.use("/assignments", assignmentRoutes);
 
-sio.sockets.on("connection", function (socket) {
-  var address = socket.handshake.address;
+// ============================================
+// ERROR HANDLING MIDDLEWARE
+// ============================================
 
-  if (address_list[address]) {
-    var socketid = address_list[address].list;
-    socketid.push(socket.id);
-    address_list[address].list = socketid;
-  } else {
-    var socketid = new Array();
-    socketid.push(socket.id);
-    address_list[address] = new Array();
-    address_list[address].list = socketid;
+// 404 handler (must be after all routes)
+app.use(notFound);
+
+// Global error handler (must be last)
+app.use(errorHandler);
+
+// ============================================
+// DATABASE CONNECTION
+// ============================================
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.DB_CONNECTION || "mongodb://localhost:27017/crud-api", {
+      // Remove deprecated options - these are now defaults in Mongoose 6+
+    });
+    console.log("✓ MongoDB connected successfully");
+  } catch (error) {
+    console.error("✗ MongoDB connection error:", error.message);
+    process.exit(1);
   }
+};
 
-  users = Object.keys(address_list).length;
+// Connect to database
+connectDB();
 
-  socket.emit("count", { count: users });
-  console.log("user joined " + socket.id);
-  console.log("connected users " + users);
-  socket.broadcast.emit("count", { count: users });
-  socket.broadcast.to(socket.id).emit("all", { count: users });
-  /*
-    handles 'all' namespace
-    function: list all todos
-    response: all todos, json format
-  */
-  /*  Todo.find({}, function (err, todos) {
-    socket.emit("all", todos);
-    // socket.broadcast.to(socket.id).emit("all", todos);
-    // console.log(socket.id);
-    // socket.broadcast.emit("all", todos);
-    // console.log(todos);
-  }); */
-  socket.on("all", function (data) {
-    Todo.find({}, function (err, todos) {
+// Handle MongoDB connection events
+mongoose.connection.on("disconnected", () => {
+  console.log("MongoDB disconnected");
+});
+
+mongoose.connection.on("error", (err) => {
+  console.error("MongoDB error:", err);
+});
+
+// ============================================
+// HTTP & SOCKET.IO SERVER SETUP
+// ============================================
+
+const server = http.createServer(app);
+
+// Initialize Socket.io with CORS
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CORS_ORIGIN || "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Socket.io connection tracking
+let connectedUsers = {};
+
+// ============================================
+// SOCKET.IO EVENT HANDLERS
+// ============================================
+
+io.on("connection", (socket) => {
+  const address = socket.handshake.address;
+  
+  // Track connected users by address
+  if (!connectedUsers[address]) {
+    connectedUsers[address] = [];
+  }
+  connectedUsers[address].push(socket.id);
+  
+  const userCount = Object.keys(connectedUsers).length;
+  
+  console.log(`✓ User connected: ${socket.id} | Total users: ${userCount}`);
+  
+  // Send current user count to the connected client
+  socket.emit("count", { count: userCount });
+  
+  // Broadcast user count to all other clients
+  socket.broadcast.emit("count", { count: userCount });
+
+  /**
+   * Handle 'all' event - Get all todos
+   */
+  socket.on("all", async () => {
+    try {
+      const todos = await Todo.find({}).sort({ createdAt: -1 });
       socket.emit("all", todos);
-      // socket.broadcast.to(socket.id).emit("all", todos);
-      // console.log(socket.id);
-      // socket.broadcast.emit("all", todos);
-      // console.log(todos);
-    });
-  });
-  /*
-    handles 'add' namespace
-    function: add a todo
-    Response: Todo object
-  */
-  socket.on("add", function (data) {
-    var todo = new Todo({
-      title: data.title,
-      complete: false,
-    });
-
-    todo.save(function (err) {
-      if (err) throw err;
-      socket.emit("added", todo);
-      socket.broadcast.emit("added", todo);
-    });
-  });
-
-  //disconnect state
-  socket.on("disconnect", function () {
-    var socketid = address_list[address].list;
-    delete socketid[socketid.indexOf(socket.id)];
-    if (Object.keys(socketid).length == 0) {
-      delete address_list[address];
+    } catch (err) {
+      console.error("Error fetching todos:", err);
+      socket.emit("error", { message: "Failed to fetch todos" });
     }
-    users = Object.keys(address_list).length;
-    socket.emit("count", { count: users });
-    socket.broadcast.emit("count", { count: users });
-    console.log("user disconnected");
-    console.log("connected users " + users);
+  });
+
+  /**
+   * Handle 'add' event - Create new todo
+   */
+  socket.on("add", async (data) => {
+    try {
+      const todo = new Todo({
+        title: data.title,
+        description: data.description,
+        complete: false,
+        priority: data.priority || 'medium'
+      });
+
+      const savedTodo = await todo.save();
+      
+      // Send to the creator
+      socket.emit("added", savedTodo);
+      
+      // Broadcast to all other clients
+      socket.broadcast.emit("added", savedTodo);
+      
+      console.log(`✓ Todo created: ${savedTodo.title}`);
+    } catch (err) {
+      console.error("Error creating todo:", err);
+      socket.emit("error", { message: "Failed to create todo" });
+    }
+  });
+
+  /**
+   * Handle 'update' event - Update todo
+   */
+  socket.on("update", async (data) => {
+    try {
+      const updatedTodo = await Todo.findByIdAndUpdate(
+        data.id,
+        { $set: data.updates },
+        { new: true, runValidators: true }
+      );
+      
+      if (updatedTodo) {
+        socket.emit("updated", updatedTodo);
+        socket.broadcast.emit("updated", updatedTodo);
+        console.log(`✓ Todo updated: ${updatedTodo.title}`);
+      } else {
+        socket.emit("error", { message: "Todo not found" });
+      }
+    } catch (err) {
+      console.error("Error updating todo:", err);
+      socket.emit("error", { message: "Failed to update todo" });
+    }
+  });
+
+  /**
+   * Handle 'delete' event - Delete todo
+   */
+  socket.on("delete", async (data) => {
+    try {
+      const deletedTodo = await Todo.findByIdAndDelete(data.id);
+      
+      if (deletedTodo) {
+        socket.emit("deleted", { id: data.id });
+        socket.broadcast.emit("deleted", { id: data.id });
+        console.log(`✓ Todo deleted: ${deletedTodo.title}`);
+      } else {
+        socket.emit("error", { message: "Todo not found" });
+      }
+    } catch (err) {
+      console.error("Error deleting todo:", err);
+      socket.emit("error", { message: "Failed to delete todo" });
+    }
+  });
+
+  /**
+   * Handle disconnect event
+   */
+  socket.on("disconnect", () => {
+    // Remove socket from tracking
+    if (connectedUsers[address]) {
+      connectedUsers[address] = connectedUsers[address].filter(id => id !== socket.id);
+      
+      // Remove address if no more sockets
+      if (connectedUsers[address].length === 0) {
+        delete connectedUsers[address];
+      }
+    }
+    
+    const userCount = Object.keys(connectedUsers).length;
+    
+    console.log(`✗ User disconnected: ${socket.id} | Total users: ${userCount}`);
+    
+    // Broadcast updated user count
+    io.emit("count", { count: userCount });
   });
 });
+
+// ============================================
+// START SERVER
+// ============================================
+
+server.listen(PORT, () => {
+  console.log("================================================");
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📚 API Documentation: http://localhost:${PORT}/swagger`);
+  console.log(`🔌 Socket.io enabled for real-time features`);
+  console.log("================================================");
+});
+
+// ============================================
+// GRACEFUL SHUTDOWN
+// ============================================
+
+const gracefulShutdown = async () => {
+  console.log("\n⚠ Shutting down gracefully...");
+  
+  // Close HTTP server
+  server.close(() => {
+    console.log("✓ HTTP server closed");
+  });
+  
+  // Close database connection
+  try {
+    await mongoose.connection.close();
+    console.log("✓ Database connection closed");
+    process.exit(0);
+  } catch (err) {
+    console.error("✗ Error during shutdown:", err);
+    process.exit(1);
+  }
+};
+
+// Handle shutdown signals
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+  gracefulShutdown();
+});
+
+// Handle unhandled promise rejections
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled Rejection:", err);
+  gracefulShutdown();
+});
+
+module.exports = app;
