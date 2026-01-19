@@ -151,6 +151,9 @@ const io = new Server(server, {
   }
 });
 
+// Make Socket.io instance available to routes
+app.set('io', io);
+
 // Socket.io connection tracking
 let connectedUsers = {};
 

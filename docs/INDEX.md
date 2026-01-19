@@ -15,6 +15,7 @@ Start here if you're new to the project:
 Use these when building with the API:
 
 - **[API_REFERENCE.md](./API_REFERENCE.md)** - Complete endpoint documentation with examples
+- **[SOCKETIO_TESTING.md](./SOCKETIO_TESTING.md)** - Socket.io real-time testing guide
 - **[LIBRARIES.md](./LIBRARIES.md)** - Understanding the tech stack
 - **[BEST_PRACTICES.md](./BEST_PRACTICES.md)** - Coding standards and patterns
 
@@ -71,6 +72,21 @@ Learn how the project is organized:
 - JavaScript examples
 
 **When to read**: Building a client application or testing the API
+
+---
+
+### [SOCKETIO_TESTING.md](./SOCKETIO_TESTING.md)
+**Purpose**: Socket.io real-time feature testing guide
+
+**What you'll find:**
+- Implemented Socket.io events
+- Testing methods (HTML client, Browser, Node.js)
+- Why Postman doesn't work
+- Example test scenarios
+- Debugging tips
+- Real-time testing strategies
+
+**When to read**: Testing Socket.io real-time features
 
 ---
 

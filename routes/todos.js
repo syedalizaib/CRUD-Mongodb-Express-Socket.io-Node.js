@@ -153,7 +153,10 @@ router.get(
  *   post:
  *     tags: [Todos]
  *     summary: Create a new todo
- *     description: Create a new todo item with validation
+ *     description: |
+ *       Create a new todo item with validation.
+ *       
+ *       **Socket.io Integration:** This endpoint automatically emits a `added` event to all connected Socket.io clients when a todo is created.
  *     requestBody:
  *       required: true
  *       content:
@@ -241,6 +244,13 @@ router.post(
       });
 
       const savedTodo = await todo.save();
+      
+      // Emit Socket.io event for real-time updates
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('added', savedTodo);
+      }
+      
       res.status(201).json({
         success: true,
         message: "Todo created successfully",
@@ -261,7 +271,10 @@ router.post(
  *   put:
  *     tags: [Todos]
  *     summary: Update entire todo
- *     description: Replace all todo fields with new values
+ *     description: |
+ *       Replace all todo fields with new values.
+ *       
+ *       **Socket.io Integration:** This endpoint automatically emits an `updated` event to all connected Socket.io clients when a todo is updated.
  *     parameters:
  *       - in: path
  *         name: todoId
@@ -343,6 +356,12 @@ router.put(
         });
       }
 
+      // Emit Socket.io event for real-time updates
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('updated', updatedTodo);
+      }
+
       res.json({
         success: true,
         message: "Todo updated successfully",
@@ -363,7 +382,10 @@ router.put(
  *   patch:
  *     tags: [Todos]
  *     summary: Update specific todo fields
- *     description: Update only specified fields of a todo
+ *     description: |
+ *       Update only specified fields of a todo.
+ *       
+ *       **Socket.io Integration:** This endpoint automatically emits an `updated` event to all connected Socket.io clients when a todo is updated.
  *     parameters:
  *       - in: path
  *         name: todoId
@@ -443,6 +465,12 @@ router.patch(
         });
       }
 
+      // Emit Socket.io event for real-time updates
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('updated', updatedTodo);
+      }
+
       res.json({
         success: true,
         message: "Todo updated successfully",
@@ -463,7 +491,10 @@ router.patch(
  *   delete:
  *     tags: [Todos]
  *     summary: Delete todo
- *     description: Remove a todo from the database
+ *     description: |
+ *       Remove a todo from the database.
+ *       
+ *       **Socket.io Integration:** This endpoint automatically emits a `deleted` event to all connected Socket.io clients when a todo is deleted.
  *     parameters:
  *       - in: path
  *         name: todoId
@@ -497,6 +528,12 @@ router.delete(
           success: false,
           error: "Todo not found"
         });
+      }
+
+      // Emit Socket.io event for real-time updates
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('deleted', { id: req.params.todoId });
       }
 
       res.json({
